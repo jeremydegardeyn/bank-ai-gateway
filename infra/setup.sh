@@ -17,7 +17,17 @@ gcloud services enable \
   modelarmor.googleapis.com \
   firestore.googleapis.com \
   bigquery.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com
+
+echo "── IAM for the Cloud Run runtime service account…"
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+RUN_SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+for role in roles/datastore.user roles/bigquery.dataEditor roles/aiplatform.user roles/modelarmor.user; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member "serviceAccount:$RUN_SA" --role "$role" --condition=None --quiet >/dev/null \
+    || echo "could not grant $role — grant it manually if gateway calls fail"
+done
 
 echo "── Model Armor template (PII / sensitive-data screening)…"
 # Basic SDP config covers common PII infoTypes (SSN, credit card, etc.).

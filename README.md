@@ -72,7 +72,7 @@ gateway."
 ## Repo layout
 
 ```
-config.yaml            tiers, routing rules, budgets, PII policy
+gateway/config.yaml    tiers, routing rules, budgets, PII policy
 gateway/app/
   main.py              FastAPI pipeline (budget → PII → route → model → screen → audit)
   guards/pii.py        Model Armor client + local regex fallback

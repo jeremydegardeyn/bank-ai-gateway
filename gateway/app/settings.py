@@ -18,7 +18,7 @@ FIRESTORE_ENABLED = bool(GCP_PROJECT) and os.environ.get("USE_FIRESTORE", "1") =
 # Claude on Vertex region — "global" is the recommended default.
 CLAUDE_VERTEX_REGION = os.environ.get("CLAUDE_VERTEX_REGION", "global")
 
-CONFIG_PATH = Path(os.environ.get("GATEWAY_CONFIG", Path(__file__).resolve().parents[2] / "config.yaml"))
+CONFIG_PATH = Path(os.environ.get("GATEWAY_CONFIG", Path(__file__).resolve().parents[1] / "config.yaml"))
 
 LOCAL_AUDIT_LOG = Path(os.environ.get("LOCAL_AUDIT_LOG", Path(__file__).resolve().parents[2] / "logs" / "audit.jsonl"))
 

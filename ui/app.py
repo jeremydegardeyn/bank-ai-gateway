@@ -7,6 +7,22 @@ import streamlit as st
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 
+
+def _auth_headers() -> dict:
+    """On Cloud Run, mint an ID token for the private gateway (service-to-service
+    auth via the metadata server). Locally, no auth is needed."""
+    if GATEWAY_URL.startswith("http://localhost"):
+        return {}
+    try:
+        import google.auth.transport.requests
+        import google.oauth2.id_token
+        token = google.oauth2.id_token.fetch_id_token(
+            google.auth.transport.requests.Request(), GATEWAY_URL
+        )
+        return {"Authorization": f"Bearer {token}"}
+    except Exception:
+        return {}
+
 st.set_page_config(page_title="Bank AI Gateway", page_icon="🏦", layout="centered")
 st.title("🏦 Bank AI Assistant")
 st.caption("All traffic passes through the enterprise AI gateway: PII screening, "
@@ -17,7 +33,8 @@ with st.sidebar:
     user_id = st.selectbox("User", ["demo-analyst", "demo-intern", "demo-manager"])
     tier = st.selectbox("Model tier", ["auto", "standard", "premium"])
     try:
-        b = requests.get(f"{GATEWAY_URL}/v1/budget/{user_id}", timeout=5).json()
+        b = requests.get(f"{GATEWAY_URL}/v1/budget/{user_id}",
+                         headers=_auth_headers(), timeout=5).json()
         st.metric("Daily token budget", f"{b['remaining']:,} left",
                   delta=f"-{b['tokens_used']:,} used")
         st.progress(min(1.0, b["tokens_used"] / max(1, b["daily_limit"])))
@@ -41,7 +58,8 @@ if prompt := st.chat_input("Ask something…"):
     payload = {"user_id": user_id, "message": prompt}
     if tier != "auto":
         payload["tier"] = tier
-    r = requests.post(f"{GATEWAY_URL}/v1/chat", json=payload, timeout=120).json()
+    r = requests.post(f"{GATEWAY_URL}/v1/chat", json=payload,
+                      headers=_auth_headers(), timeout=120).json()
 
     with st.chat_message("assistant"):
         if r["outcome"] == "pii_blocked":
