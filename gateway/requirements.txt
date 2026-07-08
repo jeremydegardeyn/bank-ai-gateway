@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml
+requests
+google-auth
+google-cloud-firestore
+google-cloud-bigquery
+google-genai
+anthropic[vertex]

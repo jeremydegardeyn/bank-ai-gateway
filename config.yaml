@@ -1,0 +1,35 @@
+# Bank AI Gateway — model tiers, routing, budgets, and PII policy.
+# GCP identifiers (project, region, Model Armor template) come from env vars — see .env.example.
+
+tiers:
+  standard:
+    provider: gemini
+    model: gemini-2.5-flash
+    max_output_tokens: 1024
+    # Vertex pay-per-token; pennies per demo session.
+  premium:
+    provider: claude
+    model: claude-opus-4-8
+    max_output_tokens: 2048
+    # Claude on Vertex AI — enable in Model Garden first (see README).
+
+routing:
+  # Requests route to standard unless the UI pins a tier or these heuristics fire.
+  premium_keywords:
+    - "analyze"
+    - "compare"
+    - "strategy"
+    - "risk assessment"
+    - "regulation"
+    - "step by step"
+  premium_min_chars: 400
+
+budgets:
+  default_daily_tokens: 20000
+  per_user_overrides:
+    demo-analyst: 50000
+    demo-intern: 2000   # low cap so the budget-exceeded path is easy to demo
+
+pii:
+  action: block          # block | redact
+  screen_responses: true # also run the model's reply through the PII screen
