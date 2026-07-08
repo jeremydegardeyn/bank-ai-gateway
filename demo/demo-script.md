@@ -42,7 +42,7 @@ Local mode: `logs/audit.jsonl`. GCP mode: BigQuery `ai_gateway.requests` —
 point Looker Studio at it for spend-per-user, tokens-over-time, and
 PII-incidents-by-type charts.
 
-## Positioning (interview framing)
+## Positioning (executive framing)
 - Banks **buy** frontier models through their cloud tenancy (Gemini / Claude on
   Vertex): contractual no-training, data stays in-region, existing IAM.
 - Banks **build** this gateway regardless of the model behind it.
