@@ -30,6 +30,9 @@ for role in roles/datastore.user roles/bigquery.dataEditor roles/aiplatform.user
 done
 
 echo "── Model Armor template (PII / sensitive-data screening)…"
+# Model Armor is served from regional endpoints only — without this override,
+# gcloud model-armor commands fail with a misleading PERMISSION_DENIED.
+gcloud config set api_endpoint_overrides/modelarmor "https://modelarmor.$REGION.rep.googleapis.com/"
 # Basic SDP config covers common PII infoTypes (SSN, credit card, etc.).
 # For bank-internal account formats, create an SDP inspect template with a
 # custom infoType and reference it here instead (advanced config).
