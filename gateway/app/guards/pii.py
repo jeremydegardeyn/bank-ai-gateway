@@ -84,14 +84,22 @@ def _screen_model_armor(text: str, kind: str) -> PiiVerdict:
 
 
 def screen(text: str, kind: str = "prompt") -> PiiVerdict:
-    """kind: 'prompt' or 'response'."""
+    """kind: 'prompt' or 'response'.
+
+    Defense in depth: the local detectors always run (they carry the
+    bank-specific patterns Model Armor's basic config doesn't know, and they
+    catch canonical test values SDP's validators reject); Model Armor adds the
+    managed detection layer when configured. Findings are the union."""
+    local = _screen_local(text)
     if MODEL_ARMOR_TEMPLATE:
         try:
-            verdict = _screen_model_armor(text, kind)
-            # Model Armor flags, local regex supplies the redacted rendering.
-            if verdict.match:
-                verdict.redacted_text = _screen_local(text).redacted_text or text
-            return verdict
+            ma = _screen_model_armor(text, kind)
+            return PiiVerdict(
+                match=ma.match or local.match,
+                findings=sorted(set(ma.findings) | set(local.findings)),
+                redacted_text=local.redacted_text or text,
+                engine="model-armor+local-regex",
+            )
         except Exception:
-            pass  # degrade to local screening rather than failing open with no screen
-    return _screen_local(text)
+            pass  # degrade to local-only screening rather than failing open
+    return local
