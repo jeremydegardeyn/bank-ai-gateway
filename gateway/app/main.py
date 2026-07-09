@@ -26,8 +26,10 @@ class ChatRequest(BaseModel):
     tier: str | None = None  # None = let the router decide
 
 
-@app.get("/healthz")
-def healthz():
+# Note: /healthz is intercepted by Google's frontend on run.app and never
+# reaches the container — hence /health.
+@app.get("/health")
+def health():
     return {"status": "ok"}
 
 
@@ -70,9 +72,17 @@ def chat(req: ChatRequest):
     # 3 + 4. Route and call the model
     tier = routing.choose_tier(prompt, req.tier)
     tier_cfg = CONFIG["tiers"][tier]
-    result = PROVIDERS[tier_cfg["provider"]](
-        prompt, tier_cfg["model"], tier_cfg["max_output_tokens"]
-    )
+    try:
+        result = PROVIDERS[tier_cfg["provider"]](
+            prompt, tier_cfg["model"], tier_cfg["max_output_tokens"]
+        )
+    except Exception as exc:
+        audit.log_event({**base_event, "outcome": "model_error", "tier": tier,
+                         "model": tier_cfg["model"], "error": type(exc).__name__})
+        return {"outcome": "model_error", "tier": tier, "model": tier_cfg["model"],
+                "reply": f"The {tier} tier model is currently unavailable "
+                         f"({type(exc).__name__}). Try the other tier or retry later.",
+                "error": type(exc).__name__}
 
     # 5. PII screen on the response
     response_findings: list[str] = []

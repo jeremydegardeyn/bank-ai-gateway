@@ -1,6 +1,7 @@
 """PII screening. Primary engine: Google Cloud Model Armor (sanitizeUserPrompt /
 sanitizeModelResponse). Fallback engine: local regex detectors, so the demo runs
 with zero GCP setup and the block/redact flow is identical either way."""
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -74,9 +75,10 @@ def _screen_model_armor(text: str, kind: str) -> PiiVerdict:
     resp.raise_for_status()
     result = resp.json().get("sanitizationResult", {})
     match = result.get("filterMatchState") == "MATCH_FOUND"
+    # Exact-match the state: "NO_MATCH_FOUND" contains "MATCH_FOUND" as a substring.
     findings = [
         name for name, fr in result.get("filterResults", {}).items()
-        if "MATCH_FOUND" in str(fr)
+        if '"matchState": "MATCH_FOUND"' in json.dumps(fr)
     ]
     return PiiVerdict(match=match, findings=findings, engine="model-armor")
 
