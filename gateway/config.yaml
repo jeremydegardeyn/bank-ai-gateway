@@ -8,10 +8,13 @@ tiers:
     max_output_tokens: 1024
     # Vertex pay-per-token; pennies per demo session.
   premium:
-    provider: claude
-    model: claude-opus-4-8
+    provider: gemini
+    model: gemini-2.5-pro
     max_output_tokens: 2048
-    # Claude on Vertex AI — enable in Model Garden first (see README).
+    # Swap to Claude on Vertex once the model's quota is granted:
+    #   provider: claude
+    #   model: claude-opus-4-8
+    # (Enable in Model Garden AND request base-model quota — defaults to 0.)
 
 routing:
   # Requests route to standard unless the UI pins a tier or these heuristics fire.
