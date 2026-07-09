@@ -14,6 +14,8 @@ MODEL_ARMOR_TEMPLATE = os.environ.get("MODEL_ARMOR_TEMPLATE", "")
 BQ_DATASET = os.environ.get("BQ_DATASET", "")          # e.g. ai_gateway
 BQ_TABLE = os.environ.get("BQ_TABLE", "requests")
 FIRESTORE_ENABLED = bool(GCP_PROJECT) and os.environ.get("USE_FIRESTORE", "1") == "1"
+# Named database — the project's (default) database may be Datastore Mode.
+FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "ai-gateway")
 
 # Claude on Vertex region — "global" is the recommended default.
 CLAUDE_VERTEX_REGION = os.environ.get("CLAUDE_VERTEX_REGION", "global")

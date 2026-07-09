@@ -16,7 +16,7 @@ gcloud run deploy ai-gateway \
   --source "$REPO_ROOT/gateway" \
   --min-instances 0 --memory 512Mi \
   --no-allow-unauthenticated \
-  --set-env-vars "GCP_PROJECT=$PROJECT_ID,GCP_REGION=$REGION,BQ_DATASET=$BQ_DATASET,MODEL_ARMOR_TEMPLATE=$MODEL_ARMOR_TEMPLATE"
+  --set-env-vars "GCP_PROJECT=$PROJECT_ID,GCP_REGION=$REGION,BQ_DATASET=$BQ_DATASET,MODEL_ARMOR_TEMPLATE=$MODEL_ARMOR_TEMPLATE,FIRESTORE_DATABASE=ai-gateway"
 
 GATEWAY_URL=$(gcloud run services describe ai-gateway --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')
 

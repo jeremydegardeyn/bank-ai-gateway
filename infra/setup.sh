@@ -42,7 +42,9 @@ gcloud model-armor templates create "$MA_TEMPLATE" \
   || echo "template may already exist — check: gcloud model-armor templates list --location=$REGION"
 
 echo "── Firestore (budgets)…"
-gcloud firestore databases create --location="$REGION" --type=firestore-native \
+# Named database: the project's (default) database may be Datastore Mode,
+# which the Firestore client cannot use.
+gcloud firestore databases create --database=ai-gateway --location="$REGION" --type=firestore-native \
   || echo "firestore database may already exist"
 
 echo "── BigQuery (audit log)…"
