@@ -13,9 +13,8 @@ from ..settings import CONFIG, FIRESTORE_DATABASE, FIRESTORE_ENABLED, GCP_PROJEC
 _local_usage: dict[str, int] = defaultdict(int)
 
 
-def _daily_limit(user_id: str) -> int:
-    budgets = CONFIG["budgets"]
-    return budgets.get("per_user_overrides", {}).get(user_id, budgets["default_daily_tokens"])
+def _daily_limit(user_id: str, limit: int | None = None) -> int:
+    return limit if limit is not None else CONFIG["budgets"]["default_daily_tokens"]
 
 
 def _doc_key(user_id: str) -> str:
@@ -37,13 +36,13 @@ def _get_usage(user_id: str) -> int:
     return _local_usage[_doc_key(user_id)]
 
 
-def check(user_id: str) -> tuple[bool, int, int]:
-    """Returns (allowed, used, limit)."""
-    used, limit = _get_usage(user_id), _daily_limit(user_id)
+def check(user_id: str, limit: int | None = None) -> tuple[bool, int, int]:
+    """Returns (allowed, used, limit). `limit` comes from the user's persona."""
+    used, limit = _get_usage(user_id), _daily_limit(user_id, limit)
     return used < limit, used, limit
 
 
-def record(user_id: str, tokens: int) -> int:
+def record(user_id: str, tokens: int, limit: int | None = None) -> int:
     """Charge tokens against the user's daily budget; returns remaining."""
     key = _doc_key(user_id)
     recorded = False
@@ -60,4 +59,4 @@ def record(user_id: str, tokens: int) -> int:
             pass
     if not recorded:
         _local_usage[key] += tokens
-    return max(0, _daily_limit(user_id) - _get_usage(user_id))
+    return max(0, _daily_limit(user_id, limit) - _get_usage(user_id))

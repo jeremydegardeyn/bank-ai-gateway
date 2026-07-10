@@ -29,9 +29,31 @@ routing:
 
 budgets:
   default_daily_tokens: 20000
-  per_user_overrides:
-    demo-analyst: 50000
-    demo-intern: 2000   # low cap so the budget-exceeded path is easy to demo
+
+# Personas: role-based entitlements. Which Google account maps to which persona
+# is deployment config (PERSONA_EMAILS env var), never committed to the repo.
+personas:
+  manager:
+    label: Branch Manager
+    daily_tokens: 50000
+    allowed_tiers: [standard, premium]
+    context: >-
+      The user is a branch manager at a regulated retail bank. They ask
+      operational, staffing, and strategy questions; keep answers practical.
+  analyst:
+    label: Data Analyst
+    daily_tokens: 50000
+    allowed_tiers: [standard, premium]
+    context: >-
+      The user is a data analyst at a regulated retail bank. Prefer precise,
+      technical answers; include SQL or BigQuery examples when relevant.
+  auditor:
+    label: Compliance Auditor
+    daily_tokens: 10000
+    allowed_tiers: [standard]   # premium requests are clamped to standard
+    context: >-
+      The user is a compliance auditor. Answers should be conservative,
+      reference controls and evidence, and avoid speculation.
 
 pii:
   action: block          # block | redact

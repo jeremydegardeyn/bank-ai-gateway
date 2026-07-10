@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank AI Assistant</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #12171a; --panel: #1a2126; --panel-2: #212a30;
+    --ink: #e6ebee; --ink-soft: #8fa1ab; --rule: #2c3840;
+    --accent: #3ba18f; --danger: #e06c6c; --danger-bg: #3a2326;
+    --warn: #d9a441; --warn-bg: #362e1c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 'Segoe UI', system-ui, sans-serif;
+    display: flex; height: 100vh;
+  }
+  /* ── Sign-in view ── */
+  #login {
+    margin: auto; text-align: center; max-width: 26rem; padding: 2rem;
+  }
+  #login h1 { font-size: 1.5rem; margin: 0 0 0.4rem; }
+  #login p { color: var(--ink-soft); margin: 0 0 1.6rem; }
+  #login .gbtn { display: flex; justify-content: center; }
+  #login .err { color: var(--danger); margin-top: 1rem; font-size: 0.9rem; }
+  #devUsers button {
+    display: block; width: 100%; margin: 0.4rem 0; padding: 0.6rem;
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--rule);
+    border-radius: 6px; cursor: pointer; font-size: 0.95rem;
+  }
+  /* ── App shell ── */
+  #shell { display: none; flex: 1; height: 100vh; }
+  aside {
+    width: 250px; background: var(--panel); border-right: 1px solid var(--rule);
+    padding: 1.2rem; display: flex; flex-direction: column; gap: 1rem;
+  }
+  aside h1 { font-size: 1rem; margin: 0; }
+  .who .email { font-size: 0.8rem; color: var(--ink-soft); word-break: break-all; }
+  .pill {
+    display: inline-block; background: var(--accent); color: #0c1512;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.05em;
+    padding: 0.15rem 0.55rem; border-radius: 999px; margin-top: 0.3rem;
+  }
+  .meter { font-size: 0.82rem; color: var(--ink-soft); }
+  .meter b { color: var(--ink); font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+  .bar { height: 5px; background: var(--panel-2); border-radius: 3px; margin-top: 0.4rem; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  select {
+    width: 100%; padding: 0.45rem; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 6px;
+  }
+  label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-soft); }
+  #signout {
+    margin-top: auto; background: none; border: 1px solid var(--rule);
+    color: var(--ink-soft); padding: 0.45rem; border-radius: 6px; cursor: pointer;
+  }
+  main { flex: 1; display: flex; flex-direction: column; }
+  #feed { flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  .msg { max-width: 44rem; padding: 0.7rem 1rem; border-radius: 10px; white-space: pre-wrap; }
+  .msg.user { background: var(--panel-2); align-self: flex-end; }
+  .msg.assistant { background: var(--panel); align-self: flex-start; border: 1px solid var(--rule); }
+  .msg.blocked { background: var(--danger-bg); border: 1px solid var(--danger); color: #f0c6c6; }
+  .msg.warn { background: var(--warn-bg); border: 1px solid var(--warn); color: #ead9ac; }
+  .meta { font-size: 0.74rem; color: var(--ink-soft); align-self: flex-start; margin: -0.5rem 0 0 0.3rem; }
+  form { display: flex; gap: 0.6rem; padding: 1rem 1.5rem; border-top: 1px solid var(--rule); }
+  #box {
+    flex: 1; padding: 0.7rem 1rem; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 8px; font: inherit;
+  }
+  #send {
+    padding: 0.7rem 1.3rem; background: var(--accent); color: #0c1512;
+    border: none; border-radius: 8px; font-weight: 600; cursor: pointer;
+  }
+  #send:disabled { opacity: 0.5; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>🏦 Bank AI Assistant</h1>
+  <p>Sign in with your work account. All traffic passes through the enterprise
+     AI gateway: PII screening, per-persona token budgets, full audit trail.</p>
+  <div class="gbtn"><div id="gsi"></div></div>
+  <div id="devUsers" style="display:none">
+    <p>Dev mode — pick a demo user:</p>
+    <button onclick="devLogin('demo-manager')">demo-manager (Branch Manager)</button>
+    <button onclick="devLogin('demo-analyst')">demo-analyst (Data Analyst)</button>
+    <button onclick="devLogin('demo-intern')">demo-intern (Compliance Auditor)</button>
+  </div>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="shell">
+  <aside>
+    <h1>🏦 Bank AI Assistant</h1>
+    <div class="who">
+      <div class="email" id="email"></div>
+      <span class="pill" id="personaLabel"></span>
+    </div>
+    <div>
+      <label>Model tier</label>
+      <select id="tier">
+        <option value="">auto</option>
+        <option value="standard">standard</option>
+        <option value="premium">premium</option>
+      </select>
+    </div>
+    <div class="meter">
+      Daily token budget<br>
+      <b id="remaining">–</b> left
+      <div class="bar"><i id="barFill" style="width:0%"></i></div>
+    </div>
+    <button id="signout" onclick="signOut()">Sign out</button>
+  </aside>
+  <main>
+    <div id="feed"></div>
+    <form onsubmit="return sendMsg(event)">
+      <input id="box" placeholder="Ask something…" autocomplete="off">
+      <button id="send" type="submit">Send</button>
+    </form>
+  </main>
+</div>
+
+<script>
+const CLIENT_ID = "{{CLIENT_ID}}";
+let cred = sessionStorage.getItem("cred") || null;
+
+function authHeaders() { return cred ? { "Authorization": "Bearer " + cred } : {}; }
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts,
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers||{}) } });
+  if (r.status === 401) { signOut(); throw new Error("unauthorized"); }
+  return r.json();
+}
+
+// ── Sign-in ──────────────────────────────────────────────────────────────
+window.onload = () => {
+  if (!CLIENT_ID) { document.getElementById("devUsers").style.display = "block"; if (cred) enter(); return; }
+  google.accounts.id.initialize({ client_id: CLIENT_ID, callback: (resp) => {
+    cred = resp.credential; sessionStorage.setItem("cred", cred); enter();
+  }});
+  google.accounts.id.renderButton(document.getElementById("gsi"),
+    { theme: "filled_black", size: "large", text: "signin_with" });
+  if (cred) enter();
+};
+
+function devLogin(user) { cred = "dev:" + user; sessionStorage.setItem("cred", cred); enter(); }
+
+function signOut() {
+  sessionStorage.removeItem("cred"); cred = null;
+  document.getElementById("shell").style.display = "none";
+  document.getElementById("login").style.display = "block";
+  document.getElementById("feed").innerHTML = "";
+}
+
+// ── App ──────────────────────────────────────────────────────────────────
+async function enter() {
+  let me;
+  try { me = await api("/api/me"); } catch { return; }
+  if (!me.provisioned) {
+    document.getElementById("loginErr").textContent =
+      (me.email || "This account") + " is not provisioned for the AI platform. Contact your administrator.";
+    sessionStorage.removeItem("cred"); cred = null;
+    return;
+  }
+  document.getElementById("login").style.display = "none";
+  document.getElementById("shell").style.display = "flex";
+  document.getElementById("email").textContent = me.email;
+  document.getElementById("personaLabel").textContent = me.label;
+  updateBudget(me.budget);
+
+  const h = await api("/api/history");
+  const feed = document.getElementById("feed");
+  feed.innerHTML = "";
+  for (const m of h.messages || []) {
+    addMsg(m.role === "user" ? "user" : "assistant", m.text,
+           m.model ? `tier: ${m.tier} · ${m.model}` : null);
+  }
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function updateBudget(b) {
+  if (!b) return;
+  document.getElementById("remaining").textContent = b.remaining.toLocaleString();
+  document.getElementById("barFill").style.width =
+    Math.min(100, 100 * b.used / Math.max(1, b.limit)) + "%";
+}
+
+function addMsg(cls, text, meta) {
+  const feed = document.getElementById("feed");
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  feed.appendChild(div);
+  if (meta) {
+    const m = document.createElement("div");
+    m.className = "meta"; m.textContent = meta;
+    feed.appendChild(m);
+  }
+  feed.scrollTop = feed.scrollHeight;
+}
+
+async function sendMsg(e) {
+  e.preventDefault();
+  const box = document.getElementById("box"), send = document.getElementById("send");
+  const text = box.value.trim();
+  if (!text) return false;
+  addMsg("user", text);
+  box.value = ""; send.disabled = true;
+  try {
+    const r = await api("/api/chat", { method: "POST",
+      body: JSON.stringify({ message: text, tier: document.getElementById("tier").value || undefined }) });
+    if (r.outcome === "pii_blocked") {
+      addMsg("blocked", r.reply, `🛑 ${r.pii.engine} · ${r.pii.findings.join(", ")}`);
+    } else if (r.outcome === "budget_exceeded") {
+      addMsg("warn", r.reply, "💸 daily budget exhausted");
+      updateBudget(r.budget);
+    } else if (r.outcome === "unauthorized" || r.outcome === "model_error") {
+      addMsg("warn", r.reply);
+    } else {
+      let meta = `tier: ${r.tier}${r.tier_clamped ? " (clamped by persona)" : ""} · ${r.model}` +
+                 ` · ${r.usage.input_tokens}→${r.usage.output_tokens} tokens`;
+      if (r.pii.prompt_redacted) meta += " · ✂️ PII redacted";
+      addMsg("assistant", r.reply, meta);
+      updateBudget(r.budget);
+    }
+  } catch (err) {
+    if (err.message !== "unauthorized") addMsg("warn", "Request failed — is the gateway up?");
+  }
+  send.disabled = false;
+  return false;
+}
+</script>
+</body>
+</html>
