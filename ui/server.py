@@ -87,13 +87,54 @@ def me(authorization: str | None = Header(default=None)):
     return JSONResponse({"email": user, **r.json()}, status_code=r.status_code)
 
 
-@app.get("/api/history")
-def get_history(authorization: str | None = Header(default=None)):
+@app.get("/api/conversations")
+def conversations(authorization: str | None = Header(default=None)):
     user = _identity(authorization)
     if user is None:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    r = requests.get(f"{GATEWAY_URL}/v1/history/{user}",
+    r = requests.get(f"{GATEWAY_URL}/v1/conversations/{user}",
                      headers=_gateway_headers(), timeout=15)
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.get("/api/conversations/{conv_id}")
+def conversation(conv_id: str, authorization: str | None = Header(default=None)):
+    user = _identity(authorization)
+    if user is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    r = requests.get(f"{GATEWAY_URL}/v1/conversations/{user}/{conv_id}",
+                     headers=_gateway_headers(), timeout=15)
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.put("/api/context")
+async def put_context(request: Request, authorization: str | None = Header(default=None)):
+    user = _identity(authorization)
+    if user is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    r = requests.put(f"{GATEWAY_URL}/v1/context/{user}", json=body,
+                     headers=_gateway_headers(), timeout=15)
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.get("/api/memories")
+def memories(authorization: str | None = Header(default=None)):
+    user = _identity(authorization)
+    if user is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    r = requests.get(f"{GATEWAY_URL}/v1/memories/{user}",
+                     headers=_gateway_headers(), timeout=15)
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.delete("/api/memories/{memory_id}")
+def delete_memory(memory_id: str, authorization: str | None = Header(default=None)):
+    user = _identity(authorization)
+    if user is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    r = requests.delete(f"{GATEWAY_URL}/v1/memories/{user}/{memory_id}",
+                        headers=_gateway_headers(), timeout=15)
     return JSONResponse(r.json(), status_code=r.status_code)
 
 
@@ -106,6 +147,8 @@ async def chat(request: Request, authorization: str | None = Header(default=None
     payload = {"user_id": user, "message": body.get("message", "")}
     if body.get("tier") in ("standard", "premium"):
         payload["tier"] = body["tier"]
+    if body.get("conversation_id"):
+        payload["conversation_id"] = body["conversation_id"]
     r = requests.post(f"{GATEWAY_URL}/v1/chat", json=payload,
                       headers=_gateway_headers(), timeout=120)
     return JSONResponse(r.json(), status_code=r.status_code)

@@ -58,3 +58,9 @@ personas:
 pii:
   action: block          # block | redact
   screen_responses: true # also run the model's reply through the PII screen
+
+context:
+  history_max_tokens: 8000        # recent conversation sent with each request
+  memory_max_items: 20            # long-term memories injected per request
+  compact_trigger_tokens: 100000  # conversation size that triggers compaction
+  keep_recent_messages: 10        # newest messages never compacted away
