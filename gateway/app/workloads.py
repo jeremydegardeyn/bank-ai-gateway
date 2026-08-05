@@ -89,11 +89,38 @@ def known_classes() -> list[str]:
     return sorted(_budgets())
 
 
-def budget_key(agent_id: str, workload_class: str) -> str:
-    """Budget is charged per agent, not per class.
+# Daily allowance for a human, when a call is made ON BEHALF OF one. Deliberately
+# separate from the workload-class limits: those bound what an autonomous agent may
+# spend, this bounds what a person may cause to be spent. Override per deployment with
+# USER_BUDGETS="analyst:60000;auditor:20000".
+DEFAULT_USER_BUDGET = 50_000
 
-    Charging per class would let one noisy agent exhaust the allowance of every other
-    agent doing the same kind of work, which makes the control unusable in practice and
-    the attribution useless. The class supplies the limit; the agent owns the spend.
+
+def user_budget(persona: str | None = None) -> int:
+    budgets = _parse_pairs(os.environ.get("USER_BUDGETS", ""))
+    try:
+        return int(budgets[persona]) if persona in budgets else DEFAULT_USER_BUDGET
+    except ValueError:
+        return DEFAULT_USER_BUDGET
+
+
+def budget_key(agent_id: str, workload_class: str, on_behalf_of: str | None = None) -> str:
+    """Who the spend is charged to.
+
+    Two cases, and conflating them makes both useless:
+
+      * **User-initiated** (`on_behalf_of` set) — an analyst asking a question. Charged to
+        the PERSON, because the answer to "what is my remaining budget" has to come from
+        somewhere, and because a shared agent id tells you nothing about who spent it.
+        `analyst_intent_router` is used by every analyst; billing them collectively means
+        one heavy user silently consumes everyone else's allowance.
+      * **Autonomous** (no `on_behalf_of`) — the steward, the nightly judge. No human
+        caused it, so it is charged to the agent. Attributing it to whoever happened to
+        trigger a deploy would be fiction.
+
+    Charging per workload class was rejected for the same reason in both cases: it lets
+    one noisy consumer exhaust every other consumer doing the same kind of work.
     """
+    if on_behalf_of:
+        return f"user:{on_behalf_of.strip().lower()}"
     return f"agent:{agent_id or 'unattributed'}"

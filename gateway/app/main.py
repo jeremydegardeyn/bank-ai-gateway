@@ -45,6 +45,7 @@ class CompleteRequest(BaseModel):
     workload_class: str                    # classification | evaluation | reasoning | ...
     prompt: str
     owner: str | None = None               # accountable human, carried into the audit
+    on_behalf_of: str | None = None        # verified end-user email, when a human asked
     tier: str | None = None
     session_id: str | None = None          # correlates with the caller's own logs
     max_output_tokens: int | None = None
@@ -61,6 +62,7 @@ class GenerateRequest(BaseModel):
     workload_class: str
     body: dict                             # contents / tools / generationConfig / systemInstruction
     owner: str | None = None
+    on_behalf_of: str | None = None        # verified end-user email, when a human asked
     tier: str | None = None
     session_id: str | None = None
 
@@ -273,7 +275,7 @@ def generate(req: GenerateRequest):
     """
     base_event = {"agent_id": req.agent_id, "workload_class": req.workload_class,
                   "owner": req.owner, "session_id": req.session_id,
-                  "surface": "generate"}
+                  "on_behalf_of": req.on_behalf_of, "surface": "generate"}
 
     workload = workloads.resolve(req.workload_class)
     if workload is None:
@@ -282,8 +284,9 @@ def generate(req: GenerateRequest):
                 "error": f"workload class '{req.workload_class}' is not registered",
                 "known_classes": workloads.known_classes()}
 
-    bkey = workloads.budget_key(req.agent_id, req.workload_class)
-    allowed, used, limit = budget.check(bkey, workload["daily_tokens"])
+    bkey = workloads.budget_key(req.agent_id, req.workload_class, req.on_behalf_of)
+    cap = workloads.user_budget() if req.on_behalf_of else workload["daily_tokens"]
+    allowed, used, limit = budget.check(bkey, cap)
     if not allowed:
         audit.log_event({**base_event, "outcome": "budget_exceeded",
                          "tokens_used": used, "daily_limit": limit})
@@ -339,7 +342,7 @@ def generate(req: GenerateRequest):
                 response_findings = out_verdict.findings
 
     in_tok, out_tok = passthrough.usage(payload)
-    remaining = budget.record(bkey, in_tok + out_tok, workload["daily_tokens"])
+    remaining = budget.record(bkey, in_tok + out_tok, cap)
     audit.log_event({
         **base_event, "outcome": "ok", "tier": tier, "tier_clamped": tier_clamped,
         "model": tier_cfg["model"], "model_served": payload.get("modelVersion"),
@@ -359,6 +362,34 @@ def generate(req: GenerateRequest):
         "budget": {"used": limit - remaining, "limit": limit, "remaining": remaining},
         "pii": {"prompt_redacted": redacted_any, "response_findings": response_findings},
     }
+
+
+@app.get("/v1/budget/user/{email}")
+def user_budget_status(email: str):
+    """What a specific person has spent today, and what is left.
+
+    Exists so "what is my remaining token budget" has an answer that comes from the
+    control rather than from documentation about the control. Read-only and keyed by the
+    caller-supplied email; the gateway is IAM-private, so the calling platform is
+    responsible for having verified that identity before asking.
+    """
+    key = workloads.budget_key("", "", on_behalf_of=email)
+    cap = workloads.user_budget()
+    _, used, limit = budget.check(key, cap)
+    return {"email": email.strip().lower(), "used": used, "limit": limit,
+            "remaining": max(0, limit - used)}
+
+
+@app.get("/v1/budget/agent/{agent_id}")
+def agent_budget_status(agent_id: str, workload_class: str = "tool_calling_agent"):
+    """The autonomous half: what an agent has spent against its class allowance."""
+    workload = workloads.resolve(workload_class)
+    if workload is None:
+        return {"error": f"workload class '{workload_class}' is not registered"}
+    _, used, limit = budget.check(workloads.budget_key(agent_id, workload_class),
+                                  workload["daily_tokens"])
+    return {"agent_id": agent_id, "workload_class": workload_class,
+            "used": used, "limit": limit, "remaining": max(0, limit - used)}
 
 
 @app.get("/v1/workloads")
@@ -385,6 +416,7 @@ def complete(req: CompleteRequest):
     """
     base_event = {"agent_id": req.agent_id, "workload_class": req.workload_class,
                   "owner": req.owner, "session_id": req.session_id,
+                  "on_behalf_of": req.on_behalf_of,
                   "prompt_chars": len(req.prompt), "surface": "complete"}
 
     # 1. Workload registration — an unregistered class is rejected, same as an
@@ -397,8 +429,10 @@ def complete(req: CompleteRequest):
                 "known_classes": workloads.known_classes()}
 
     # 2. Budget — charged per agent, limit supplied by the class.
-    bkey = workloads.budget_key(req.agent_id, req.workload_class)
-    allowed, used, limit = budget.check(bkey, workload["daily_tokens"])
+    bkey = workloads.budget_key(req.agent_id, req.workload_class, req.on_behalf_of)
+    # A user-initiated call is bounded by the PERSON's allowance, not the agent class's.
+    cap = workloads.user_budget() if req.on_behalf_of else workload["daily_tokens"]
+    allowed, used, limit = budget.check(bkey, cap)
     if not allowed:
         audit.log_event({**base_event, "outcome": "budget_exceeded",
                          "tokens_used": used, "daily_limit": limit})
@@ -447,7 +481,7 @@ def complete(req: CompleteRequest):
     # 7. Charge + audit. Token counts are the attribution primitive the calling platform
     #    joins to its own eval outcomes to get cost per *successful* task.
     total_tokens = result["input_tokens"] + result["output_tokens"]
-    remaining = budget.record(bkey, total_tokens, workload["daily_tokens"])
+    remaining = budget.record(bkey, total_tokens, cap)
     audit.log_event({
         **base_event, "outcome": "ok", "tier": tier, "tier_clamped": tier_clamped,
         "model": result["model"], "model_served": result.get("model_version"),
