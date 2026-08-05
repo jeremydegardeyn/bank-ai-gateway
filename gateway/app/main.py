@@ -19,9 +19,9 @@ Request pipeline:
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
-from . import audit, context, personas, routing, store
+from . import audit, context, personas, routing, store, workloads
 from .guards import budget, pii
-from .providers import PROVIDERS
+from .providers import PROVIDERS, passthrough
 from .settings import CONFIG
 
 app = FastAPI(title="Bank AI Gateway")
@@ -32,6 +32,37 @@ class ChatRequest(BaseModel):
     message: str
     tier: str | None = None
     conversation_id: str | None = None  # None = start a new conversation
+
+
+class CompleteRequest(BaseModel):
+    """Service-to-service governed completion.
+
+    Distinct from ChatRequest because the caller is a registered agent, not a human:
+    no conversation, no memories, no persona context — just a governed single-shot
+    completion attributed to an agent id and a workload class.
+    """
+    agent_id: str                          # registry key in the calling platform
+    workload_class: str                    # classification | evaluation | reasoning | ...
+    prompt: str
+    owner: str | None = None               # accountable human, carried into the audit
+    tier: str | None = None
+    session_id: str | None = None          # correlates with the caller's own logs
+    max_output_tokens: int | None = None
+
+
+class GenerateRequest(BaseModel):
+    """Structured passthrough for tool-calling agents.
+
+    Carries a full Vertex `generateContent` body rather than a prompt string, because a
+    string cannot represent function declarations or a function-call/response turn.
+    Flattening an agent request would silently strip its tools.
+    """
+    agent_id: str
+    workload_class: str
+    body: dict                             # contents / tools / generationConfig / systemInstruction
+    owner: str | None = None
+    tier: str | None = None
+    session_id: str | None = None
 
 
 # Note: /healthz is intercepted by Google's frontend on run.app — hence /health.
@@ -220,4 +251,219 @@ def chat(req: ChatRequest):
         "pii": {"prompt_redacted": verdict.match,
                 "prompt_findings": verdict.findings,
                 "response_findings": response_findings},
+    }
+
+
+@app.post("/v1/generate")
+def generate(req: GenerateRequest):
+    """Governed structured passthrough — the surface tool-calling agents use.
+
+    Same controls as /v1/complete, applied *around* the payload rather than by rewriting
+    it: the body goes to the provider intact and the provider's response comes back
+    intact, so function declarations and function-call turns survive. Two differences
+    from /v1/complete worth knowing:
+
+      * PII screening runs over the request's **text parts**, not a flattened prompt, and
+        skips `functionResponse` payloads — those are governed tool output the platform
+        produced, and screening them would flag exactly the account data the agent was
+        asked to fetch. The response screen is where that risk is actually caught.
+      * The **model is chosen by the gateway**, not by the caller. An agent naming its own
+        model would put tier policy back in the caller's hands, which is the thing being
+        centralized.
+    """
+    base_event = {"agent_id": req.agent_id, "workload_class": req.workload_class,
+                  "owner": req.owner, "session_id": req.session_id,
+                  "surface": "generate"}
+
+    workload = workloads.resolve(req.workload_class)
+    if workload is None:
+        audit.log_event({**base_event, "outcome": "unregistered_workload"})
+        return {"outcome": "unregistered_workload",
+                "error": f"workload class '{req.workload_class}' is not registered",
+                "known_classes": workloads.known_classes()}
+
+    bkey = workloads.budget_key(req.agent_id, req.workload_class)
+    allowed, used, limit = budget.check(bkey, workload["daily_tokens"])
+    if not allowed:
+        audit.log_event({**base_event, "outcome": "budget_exceeded",
+                         "tokens_used": used, "daily_limit": limit})
+        return {"outcome": "budget_exceeded", "error": "daily token budget exhausted",
+                "budget": {"used": used, "limit": limit, "remaining": 0}}
+
+    body = dict(req.body or {})
+    contents = body.get("contents") or []
+    texts = passthrough._text_parts(contents)
+    base_event["prompt_chars"] = sum(len(t) for t in texts)
+    base_event["turns"] = len(contents)
+
+    # PII screen over the request's text parts.
+    findings, redacted_any = [], False
+    for text in texts:
+        verdict = pii.screen(text, kind="prompt")
+        if verdict.match:
+            findings.extend(verdict.findings)
+    if findings:
+        if CONFIG["pii"]["action"] == "block":
+            audit.log_event({**base_event, "outcome": "pii_blocked",
+                             "pii_findings": sorted(set(findings))})
+            return {"outcome": "pii_blocked", "error": "request contains sensitive data",
+                    "pii": {"findings": sorted(set(findings))}}
+        body["contents"] = passthrough._redact_text_parts(
+            contents, lambda t: pii.screen(t, kind="prompt").redacted_text or t)
+        redacted_any = True
+
+    # Tier + model chosen here, not by the caller.
+    tier = routing.choose_tier(" ".join(texts)[:4000], req.tier)
+    tier_clamped = False
+    if workload["clamp_tier"] and tier != workload["clamp_tier"]:
+        tier, tier_clamped = workload["clamp_tier"], True
+    tier_cfg = CONFIG["tiers"][tier]
+
+    try:
+        payload = passthrough.generate(body, tier_cfg["model"])
+    except Exception as exc:
+        audit.log_event({**base_event, "outcome": "model_error", "tier": tier,
+                         "model": tier_cfg["model"], "error": type(exc).__name__})
+        return {"outcome": "model_error", "tier": tier, "model": tier_cfg["model"],
+                "error": type(exc).__name__}
+
+    # Response screen. A findings hit is reported but the payload is NOT rewritten:
+    # blanking a part would corrupt a function-call turn mid-conversation and the agent
+    # would fail in a way that looks like a model bug. Blocking belongs on the request.
+    response_findings: list[str] = []
+    if CONFIG["pii"].get("screen_responses"):
+        out_text = passthrough._response_text(payload)
+        if out_text.strip():
+            out_verdict = pii.screen(out_text, kind="response")
+            if out_verdict.match:
+                response_findings = out_verdict.findings
+
+    in_tok, out_tok = passthrough.usage(payload)
+    remaining = budget.record(bkey, in_tok + out_tok, workload["daily_tokens"])
+    audit.log_event({
+        **base_event, "outcome": "ok", "tier": tier, "tier_clamped": tier_clamped,
+        "model": tier_cfg["model"], "model_served": payload.get("modelVersion"),
+        "input_tokens": in_tok, "output_tokens": out_tok,
+        "pii_prompt_redacted": redacted_any,
+        "pii_response_findings": response_findings,
+    })
+
+    return {
+        "outcome": "ok",
+        "response": payload,                 # returned intact — tool calls survive
+        "tier": tier,
+        "tier_clamped": tier_clamped,
+        "model": tier_cfg["model"],
+        "model_served": payload.get("modelVersion"),
+        "usage": {"input_tokens": in_tok, "output_tokens": out_tok},
+        "budget": {"used": limit - remaining, "limit": limit, "remaining": remaining},
+        "pii": {"prompt_redacted": redacted_any, "response_findings": response_findings},
+    }
+
+
+@app.get("/v1/workloads")
+def list_workloads():
+    """Registered workload classes and their allowances — what a calling platform
+    checks against before wiring a new call site."""
+    return {"classes": [workloads.resolve(c) for c in workloads.known_classes()]}
+
+
+@app.post("/v1/complete")
+def complete(req: CompleteRequest):
+    """Governed completion for registered agents and machine call sites.
+
+    Same control pipeline as /v1/chat — budget, PII screen in, tier routing, model call,
+    PII screen out, audit — with two differences that matter:
+
+      * attribution is to an **agent id and workload class**, so spend and behaviour roll
+        up per agent rather than per human;
+      * no conversation state is created, because an agent's tool-call turn is not a
+        conversation and giving it one would be a data-retention decision nobody made.
+
+    The response carries usage and the serving model version so the caller can compute
+    cost per task and detect drift without a second call.
+    """
+    base_event = {"agent_id": req.agent_id, "workload_class": req.workload_class,
+                  "owner": req.owner, "session_id": req.session_id,
+                  "prompt_chars": len(req.prompt), "surface": "complete"}
+
+    # 1. Workload registration — an unregistered class is rejected, same as an
+    #    unprovisioned human. Defaulting unknown callers is how a gateway becomes a proxy.
+    workload = workloads.resolve(req.workload_class)
+    if workload is None:
+        audit.log_event({**base_event, "outcome": "unregistered_workload"})
+        return {"outcome": "unregistered_workload",
+                "error": f"workload class '{req.workload_class}' is not registered",
+                "known_classes": workloads.known_classes()}
+
+    # 2. Budget — charged per agent, limit supplied by the class.
+    bkey = workloads.budget_key(req.agent_id, req.workload_class)
+    allowed, used, limit = budget.check(bkey, workload["daily_tokens"])
+    if not allowed:
+        audit.log_event({**base_event, "outcome": "budget_exceeded",
+                         "tokens_used": used, "daily_limit": limit})
+        return {"outcome": "budget_exceeded", "error": "daily token budget exhausted",
+                "budget": {"used": used, "limit": limit, "remaining": 0}}
+
+    # 3. PII screen on the prompt. An agent assembling a prompt from account data is a
+    #    likelier source of leakage than a human typing one, so this is not optional here.
+    verdict = pii.screen(req.prompt, kind="prompt")
+    prompt = req.prompt
+    if verdict.match:
+        if CONFIG["pii"]["action"] == "block":
+            audit.log_event({**base_event, "outcome": "pii_blocked",
+                             "pii_engine": verdict.engine, "pii_findings": verdict.findings})
+            return {"outcome": "pii_blocked",
+                    "error": "prompt contains sensitive data",
+                    "pii": {"engine": verdict.engine, "findings": verdict.findings}}
+        prompt = verdict.redacted_text or prompt
+
+    # 4. Tier routing, clamped by workload class. A one-word intent classification must
+    #    not reach a premium model regardless of what the caller requested.
+    tier = routing.choose_tier(prompt, req.tier)
+    tier_clamped = False
+    if workload["clamp_tier"] and tier != workload["clamp_tier"]:
+        tier, tier_clamped = workload["clamp_tier"], True
+    tier_cfg = CONFIG["tiers"][tier]
+    max_out = req.max_output_tokens or tier_cfg["max_output_tokens"]
+
+    # 5. Model call — the raw prompt, with no persona or memory injection.
+    try:
+        result = PROVIDERS[tier_cfg["provider"]](prompt, tier_cfg["model"], max_out)
+    except Exception as exc:
+        audit.log_event({**base_event, "outcome": "model_error", "tier": tier,
+                         "model": tier_cfg["model"], "error": type(exc).__name__})
+        return {"outcome": "model_error", "tier": tier, "model": tier_cfg["model"],
+                "error": type(exc).__name__}
+
+    # 6. PII screen on the response.
+    response_findings: list[str] = []
+    if CONFIG["pii"].get("screen_responses"):
+        out_verdict = pii.screen(result["text"], kind="response")
+        if out_verdict.match:
+            response_findings = out_verdict.findings
+            result["text"] = out_verdict.redacted_text or ""
+
+    # 7. Charge + audit. Token counts are the attribution primitive the calling platform
+    #    joins to its own eval outcomes to get cost per *successful* task.
+    total_tokens = result["input_tokens"] + result["output_tokens"]
+    remaining = budget.record(bkey, total_tokens, workload["daily_tokens"])
+    audit.log_event({
+        **base_event, "outcome": "ok", "tier": tier, "tier_clamped": tier_clamped,
+        "model": result["model"], "model_served": result.get("model_version"),
+        "input_tokens": result["input_tokens"], "output_tokens": result["output_tokens"],
+        "pii_prompt_redacted": verdict.match, "pii_response_findings": response_findings,
+    })
+
+    return {
+        "outcome": "ok",
+        "text": result["text"],
+        "tier": tier,
+        "tier_clamped": tier_clamped,
+        "model": result["model"],
+        "model_served": result.get("model_version"),
+        "usage": {"input_tokens": result["input_tokens"],
+                  "output_tokens": result["output_tokens"]},
+        "budget": {"used": limit - remaining, "limit": limit, "remaining": remaining},
+        "pii": {"prompt_redacted": verdict.match, "response_findings": response_findings},
     }

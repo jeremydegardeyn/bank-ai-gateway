@@ -28,4 +28,9 @@ def generate(prompt: str, model: str, max_output_tokens: int) -> dict:
         "input_tokens": usage.prompt_token_count or 0,
         "output_tokens": usage.candidates_token_count or 0,
         "model": model,
+        # What actually served, as reported by the provider — distinct from `model`,
+        # which is only what we asked for. Requesting an alias and recording the version
+        # that answered is the difference between an intention and evidence of drift.
+        # None when the surface does not report it; never back-filled from the request.
+        "model_version": getattr(resp, "model_version", None),
     }
