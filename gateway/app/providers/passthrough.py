@@ -14,9 +14,19 @@ Mock mode (no GCP_PROJECT) returns a well-formed response so the whole agent pat
 offline, matching the behaviour of the other providers.
 """
 import json
+import urllib.error
 import urllib.request
 
 from ..settings import GCP_PROJECT, GCP_REGION
+
+
+class PassthroughError(RuntimeError):
+    """Vertex refused, and said why. Carries the message, not just the status."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(f"vertex {status}: {detail}" if detail else f"vertex {status}")
+        self.status = status
+        self.detail = detail
 
 
 def _text_parts(contents: list) -> list[str]:
@@ -87,8 +97,19 @@ def generate(body: dict, model: str, timeout: float = 120.0) -> dict:
         url, data=json.dumps(body).encode(), method="POST",
         headers={"Authorization": f"Bearer {creds.token}",
                  "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        # Read the body. urllib discards it otherwise, and the body is the only part that
+        # says WHY — "Invalid value at 'system_instruction'" versus a quota 429 are the
+        # same HTTPError to a caller that only logs the exception type. Six agent turns
+        # failed for a day behind exactly that.
+        try:
+            detail = json.loads(e.read())["error"]["message"][:300]
+        except Exception:
+            detail = ""
+        raise PassthroughError(e.code, detail) from None
 
 
 def usage(payload: dict) -> tuple[int, int]:

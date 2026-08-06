@@ -465,10 +465,13 @@ def complete(req: CompleteRequest):
     try:
         result = PROVIDERS[tier_cfg["provider"]](prompt, tier_cfg["model"], max_out)
     except Exception as exc:
+        detail = getattr(exc, "detail", "") or str(exc)[:300]
+        print(f"generate: vertex refused — {detail}")
         audit.log_event({**base_event, "outcome": "model_error", "tier": tier,
-                         "model": tier_cfg["model"], "error": type(exc).__name__})
+                         "model": tier_cfg["model"],
+                         "error": f"{type(exc).__name__}: {detail}"[:400]})
         return {"outcome": "model_error", "tier": tier, "model": tier_cfg["model"],
-                "error": type(exc).__name__}
+                "error": type(exc).__name__, "detail": detail}
 
     # 6. PII screen on the response.
     response_findings: list[str] = []
