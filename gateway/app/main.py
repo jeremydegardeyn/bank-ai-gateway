@@ -49,6 +49,11 @@ class CompleteRequest(BaseModel):
     tier: str | None = None
     session_id: str | None = None          # correlates with the caller's own logs
     max_output_tokens: int | None = None
+    # What tier selection should read. A RAG prompt is long because of its CONTEXT, not
+    # because the question is hard — routing on the assembled payload sent every grounded
+    # question to the premium model. Callers pass the bare question here; tier routing
+    # uses it and the model still receives the full `prompt`.
+    routing_text: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -454,7 +459,7 @@ def complete(req: CompleteRequest):
 
     # 4. Tier routing, clamped by workload class. A one-word intent classification must
     #    not reach a premium model regardless of what the caller requested.
-    tier = routing.choose_tier(prompt, req.tier)
+    tier = routing.choose_tier(req.routing_text or prompt, req.tier)
     tier_clamped = False
     if workload["clamp_tier"] and tier != workload["clamp_tier"]:
         tier, tier_clamped = workload["clamp_tier"], True
