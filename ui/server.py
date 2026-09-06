@@ -147,8 +147,29 @@ async def chat(request: Request, authorization: str | None = Header(default=None
     payload = {"user_id": user, "message": body.get("message", "")}
     if body.get("tier") in ("standard", "premium"):
         payload["tier"] = body["tier"]
+
+    # Two surfaces, one box. With tools on, the question goes to the MCP surface, which
+    # answers from a remote server's tools or refuses; with it off, the model answers
+    # from its own knowledge. Keeping them visibly separate is the point of the toggle:
+    # "where did this answer come from" should never be a guess.
+    if body.get("tools"):
+        payload["server"] = body.get("server") or "finchat"
+        r = requests.post(f"{GATEWAY_URL}/v1/mcp/chat", json=payload,
+                          headers=_gateway_headers(), timeout=180)
+        return JSONResponse(r.json(), status_code=r.status_code)
+
     if body.get("conversation_id"):
         payload["conversation_id"] = body["conversation_id"]
     r = requests.post(f"{GATEWAY_URL}/v1/chat", json=payload,
                       headers=_gateway_headers(), timeout=120)
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.get("/api/mcp/servers")
+def mcp_servers(authorization: str | None = Header(default=None)):
+    """Live tool discovery, so the UI can say what is reachable before anyone asks."""
+    if _identity(authorization) is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    r = requests.get(f"{GATEWAY_URL}/v1/mcp/servers",
+                     headers=_gateway_headers(), timeout=90)
     return JSONResponse(r.json(), status_code=r.status_code)

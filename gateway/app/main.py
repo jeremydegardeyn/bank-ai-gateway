@@ -19,7 +19,7 @@ Request pipeline:
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
-from . import audit, context, personas, routing, store, workloads
+from . import audit, context, mcp_endpoint, personas, routing, store, workloads
 from .guards import budget, pii
 from .providers import PROVIDERS, passthrough
 from .settings import CONFIG
@@ -32,6 +32,15 @@ class ChatRequest(BaseModel):
     message: str
     tier: str | None = None
     conversation_id: str | None = None  # None = start a new conversation
+
+
+class MCPChatRequest(BaseModel):
+    """A question answered from a remote MCP server's tools, under gateway control."""
+    user_id: str
+    message: str
+    server: str = "finchat"         # key in MCP_SERVERS
+    tier: str | None = None
+    max_tool_turns: int = 4         # bounded: a loop is N model calls, all billable
 
 
 class CompleteRequest(BaseModel):
@@ -509,3 +518,21 @@ def complete(req: CompleteRequest):
         "budget": {"used": limit - remaining, "limit": limit, "remaining": remaining},
         "pii": {"prompt_redacted": verdict.match, "response_findings": response_findings},
     }
+
+
+@app.get("/v1/mcp/servers")
+def mcp_servers():
+    """Remote MCP servers this gateway can reach, with their live tool lists."""
+    return mcp_endpoint.mcp_servers()
+
+
+@app.post("/v1/mcp/chat")
+def mcp_chat(req: MCPChatRequest):
+    """Answer a question from a remote MCP server's tools, under the full pipeline.
+
+    The controls that make this different from pointing a model at an MCP server are in
+    `mcp_endpoint.py`: tool results are screened, the budget covers every turn of the
+    loop, the tool names are audited, and an unreachable server refuses rather than
+    letting the model answer from memory.
+    """
+    return mcp_endpoint.mcp_chat(req)

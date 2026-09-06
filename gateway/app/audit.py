@@ -26,6 +26,9 @@ def _bq_row(event: dict) -> dict:
 _EXPECTED_FIELDS = {
     "agent_id", "workload_class", "session_id", "on_behalf_of", "owner",
     "surface", "model_served", "tier_clamped",
+    # The MCP surface. "which model answered" is half the record; "what data did it
+    # reach for" is the half a regulator asks about, and it is only in `tools_called`.
+    "mcp_server", "tools_called",
 }
 _schema_checked = False
 

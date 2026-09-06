@@ -8,3 +8,6 @@ google-cloud-firestore
 google-cloud-bigquery
 google-genai
 anthropic[vertex]
+# MCP client (streamable HTTP). Pulls a uvicorn floor of its own: the SDK ships both
+# halves of the protocol and does not know this process only needs the client.
+mcp==1.27.2

@@ -64,6 +64,13 @@
   .msg.assistant { background: var(--panel); align-self: flex-start; border: 1px solid var(--rule); }
   .msg.blocked { background: var(--danger-bg); border: 1px solid var(--danger); color: #f0c6c6; }
   .msg.warn { background: var(--warn-bg); border: 1px solid var(--warn); color: #ead9ac; }
+  .toolrow { display: flex; align-items: center; gap: .45rem; margin: .1rem 0 .35rem; }
+  .toolrow label { margin: 0; cursor: pointer; }
+  .trace { font-size: .72rem; color: var(--ink-soft); align-self: flex-start;
+           margin: -0.35rem 0 0 .3rem; border-left: 2px solid var(--rule);
+           padding: .15rem 0 .15rem .5rem; white-space: pre-wrap; }
+  .trace b { color: var(--ink); font-weight: 600; }
+  .trace .held { color: var(--warn); }
   .meta { font-size: 0.74rem; color: var(--ink-soft); align-self: flex-start; margin: -0.5rem 0 0 0.3rem; }
   form { display: flex; gap: 0.6rem; padding: 1rem 1.5rem; border-top: 1px solid var(--rule); }
   #box {
@@ -141,6 +148,11 @@
         <option value="premium">premium</option>
       </select>
     </div>
+    <div class="toolrow">
+      <input type="checkbox" id="useTools">
+      <label for="useTools">Bank tools (MCP)</label>
+    </div>
+    <div class="meta" id="toolStatus" style="margin:-.2rem 0 .4rem .1rem"></div>
     <div class="meter">
       Daily token budget<br>
       <b id="remaining">–</b> left
@@ -311,6 +323,43 @@ function addMsg(cls, text, meta) {
   feed.scrollTop = feed.scrollHeight;
 }
 
+function addTrace(r) {
+  const feed = document.getElementById("feed");
+  const div = document.createElement("div");
+  div.className = "trace";
+  const lines = r.tool_calls.map(c => {
+    const args = Object.entries(c.args || {}).map(([k, v]) => `${k}=${v}`).join(", ");
+    const held = c.withheld ? ` <span class="held">⚠ withheld: ${c.findings.join(", ")}</span>` : "";
+    return `<b>${c.tool}</b>(${args}) → ${c.chars} chars, ${c.ms} ms${held}`;
+  });
+  div.innerHTML = "via MCP on <b>" + r.server + "</b> — " +
+                  r.tools_available.length + " tools offered, " +
+                  r.tool_calls.length + " called
+" + lines.join("
+");
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+async function loadTools() {
+  const el = document.getElementById("toolStatus");
+  el.textContent = "checking tool servers…";
+  try {
+    const r = await api("/api/mcp/servers");
+    const up = (r.servers || []).filter(s => s.reachable);
+    // A registered-but-unreachable server is the interesting state, so it is named
+    // rather than hidden behind a generic "unavailable".
+    el.textContent = up.length
+      ? `${up.map(s => s.name + " (" + s.tools.length + " tools)").join(", ")} reachable`
+      : ((r.servers || []).length ? "registered but unreachable: " +
+          r.servers.map(s => s.name).join(", ") : "no MCP servers registered");
+  } catch (err) { el.textContent = "tool discovery failed"; }
+}
+
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "useTools" && e.target.checked) loadTools();
+});
+
 async function sendMsg(e) {
   e.preventDefault();
   const box = document.getElementById("box"), send = document.getElementById("send");
@@ -321,6 +370,7 @@ async function sendMsg(e) {
   try {
     const r = await api("/api/chat", { method: "POST",
       body: JSON.stringify({ message: text, conversation_id: convId || undefined,
+                             tools: document.getElementById("useTools").checked,
                              tier: document.getElementById("tier").value || undefined }) });
     const isNew = !convId && r.conversation_id;
     if (r.conversation_id) convId = r.conversation_id;
@@ -330,6 +380,8 @@ async function sendMsg(e) {
     } else if (r.outcome === "budget_exceeded") {
       addMsg("warn", r.reply, "💸 daily budget exhausted");
       updateBudget(r.budget);
+    } else if (r.outcome === "tools_unavailable") {
+      addMsg("warn", r.reply, "🔌 " + (r.error || "tool server unreachable"));
     } else if (r.outcome === "unauthorized" || r.outcome === "model_error") {
       addMsg("warn", r.reply);
     } else {
@@ -337,7 +389,9 @@ async function sendMsg(e) {
                  ` · ${r.usage.input_tokens}→${r.usage.output_tokens} tokens`;
       if (r.pii.prompt_redacted) meta += " · ✂️ PII redacted";
       if (r.compacted) meta += ` · 🗜️ compacted (+${r.memories_added} memories)`;
+      if (r.tool_calls) meta += ` · 🔧 ${r.server} · ${r.turns} model turn${r.turns > 1 ? "s" : ""}`;
       addMsg("assistant", r.reply, meta);
+      if (r.tool_calls && r.tool_calls.length) addTrace(r);
       updateBudget(r.budget);
       if (r.compacted) loadMemories();
     }

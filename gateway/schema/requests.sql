@@ -35,4 +35,10 @@ ALTER TABLE `strongsville-city-schools.ai_gateway.requests`
   ADD COLUMN IF NOT EXISTS tier_clamped      BOOL,
   ADD COLUMN IF NOT EXISTS turns             INT64,
   ADD COLUMN IF NOT EXISTS compaction_tokens INT64,
-  ADD COLUMN IF NOT EXISTS error             STRING;
+  ADD COLUMN IF NOT EXISTS error             STRING,
+  -- The MCP surface: which remote tool server was consulted, and which of its tools the
+  -- model actually called (a JSON array — audit._bq_row serialises lists to STRING).
+  -- Without the second column the audit says a model answered a question about an
+  -- account and cannot say what it read to do it.
+  ADD COLUMN IF NOT EXISTS mcp_server        STRING,
+  ADD COLUMN IF NOT EXISTS tools_called      STRING;
