@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-local",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "server:app",
+        "--port",
+        "8090",
+        "--app-dir",
+        "ui"
+      ],
+      "port": 8090,
+      "env": {
+        "GATEWAY_URL": "https://ai-gateway-fdkbl4wtua-uc.a.run.app"
+      }
+    }
+  ]
+}

@@ -16,9 +16,17 @@
 -- not exist. `audit._warn_on_schema_drift` now warns once per process when the table is
 -- missing an expected field, but a warning is a backstop, not a substitute for this.
 --
---   bq query --project_id=<project> --use_legacy_sql=false < schema/requests.sql
+--   bq query --project_id=<project> --location=us-central1 --      --use_legacy_sql=false < schema/requests.sql
+--
+-- The dataset is `ai_gateway_audit`, and the `--location` flag is not optional. This
+-- file said `ai_gateway` until 2026-09-06: a dataset of the same shape that exists, in
+-- multi-region US, holding nothing. Every ALTER in it succeeded, against a table the
+-- gateway has never written to — the deployed BQ_DATASET is ai_gateway_audit, in
+-- us-central1, and bq resolves a same-named dataset in the wrong location by erroring
+-- only if you ask for the right one. So the file whose entire job is to stop columns
+-- being silently discarded was itself silently pointed at the wrong table.
 
-ALTER TABLE `strongsville-city-schools.ai_gateway.requests`
+ALTER TABLE `strongsville-city-schools.ai_gateway_audit.requests`
   -- Attribution: who called, on whose behalf, and under which allowance.
   ADD COLUMN IF NOT EXISTS agent_id          STRING,  -- registered agent in the caller's registry
   ADD COLUMN IF NOT EXISTS workload_class    STRING,  -- classification | evaluation | reasoning | ...

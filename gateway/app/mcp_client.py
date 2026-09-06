@@ -60,6 +60,25 @@ def servers() -> dict[str, str]:
     return out
 
 
+def _jwt(stdout: str) -> str | None:
+    """The JWT in a command's stdout, ignoring anything else it printed.
+
+    `stdout.strip()` looks obviously right and is not. The gcloud launcher on Windows
+    can emit a stray line — a temp-file path, in the case that produced this — before
+    the token, and the whole blob then goes into an Authorization header. The failure is
+    a 401, or `InvalidHeader: return character(s) in header value`, neither of which
+    mentions gcloud.
+
+    A JWT is three base64url segments and no spaces. Match that rather than trusting a
+    subprocess to print only what you asked for.
+    """
+    for line in reversed((stdout or "").splitlines()):
+        line = line.strip()
+        if line.count(".") == 2 and " " not in line and len(line) > 100:
+            return line
+    return None
+
+
 def _id_token(audience: str) -> str | None:
     """An OIDC id-token for a private Cloud Run audience.
 
@@ -101,7 +120,7 @@ def _id_token(audience: str) -> str | None:
             out = subprocess.run(["gcloud", "auth", "print-identity-token"],
                                  capture_output=True, text=True, timeout=30,
                                  stdin=subprocess.DEVNULL)
-            token = out.stdout.strip() if out.returncode == 0 else None
+            token = _jwt(out.stdout) if out.returncode == 0 else None
         except Exception:
             token = None
 

@@ -334,9 +334,7 @@ function addTrace(r) {
   });
   div.innerHTML = "via MCP on <b>" + r.server + "</b> — " +
                   r.tools_available.length + " tools offered, " +
-                  r.tool_calls.length + " called
-" + lines.join("
-");
+                  r.tool_calls.length + " called\n" + lines.join("\n");
   feed.appendChild(div);
   feed.scrollTop = feed.scrollHeight;
 }
