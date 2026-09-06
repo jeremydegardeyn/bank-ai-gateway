@@ -100,8 +100,11 @@ def _gateway_headers() -> dict:
         token = google.oauth2.id_token.fetch_id_token(
             google.auth.transport.requests.Request(), GATEWAY_URL)
         return {"Authorization": f"Bearer {token}"}
-    except Exception as workload_err:
-        pass
+    except Exception as e:
+        # Bound to a second name on purpose: `except ... as workload_err` UNBINDS the
+        # name at the end of the handler, so the reference below would be a NameError —
+        # on exactly the failure path that exists to explain a failure.
+        workload_err = e
 
     gcloud = shutil.which("gcloud")
     if gcloud:
