@@ -36,6 +36,19 @@ if ! gcloud iam service-accounts describe "$GATEWAY_SA" --project "$PROJECT_ID" 
   done
 fi
 
+# The UI is PUBLIC and holds no project roles at all: it verifies a Google sign-in
+# token and forwards the email to the gateway, and every capability it needs is
+# granted per-target (run.invoker on the gateway, below). It ran as the project's
+# default compute service account until 2026-09-07 — which carries roles/owner. An
+# internet-facing container with project owner is the single worst identity in a
+# demo, and it is invisible because nothing in the app ever uses the extra reach.
+UI_SA="${UI_SA:-ai-gateway-ui-sa@${PROJECT_ID}.iam.gserviceaccount.com}"
+if ! gcloud iam service-accounts describe "$UI_SA" --project "$PROJECT_ID" >/dev/null 2>&1; then
+  echo "── Creating the UI service account…"
+  gcloud iam service-accounts create "${UI_SA%%@*}" --project "$PROJECT_ID" \
+    --display-name "Bank AI Gateway UI (Cloud Run runtime, no project roles)"
+fi
+
 echo "── Deploying gateway (private — IAM-authenticated callers only)…"
 gcloud run deploy ai-gateway \
   --project "$PROJECT_ID" --region "$REGION" \
@@ -52,11 +65,11 @@ gcloud run deploy ai-gateway-ui \
   --project "$PROJECT_ID" --region "$REGION" \
   --source "$REPO_ROOT/ui" \
   --min-instances 0 --memory 512Mi \
+  --service-account "$UI_SA" \
   --allow-unauthenticated \
   --set-env-vars "GATEWAY_URL=$GATEWAY_URL,GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
 
 echo "── Granting the UI's service account permission to invoke the gateway…"
-UI_SA=$(gcloud run services describe ai-gateway-ui --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')
 gcloud run services add-iam-policy-binding ai-gateway \
   --project "$PROJECT_ID" --region "$REGION" \
   --member "serviceAccount:$UI_SA" --role roles/run.invoker
@@ -64,6 +77,6 @@ gcloud run services add-iam-policy-binding ai-gateway \
 UI_URL=$(gcloud run services describe ai-gateway-ui --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')
 echo ""
 echo "Done."
-echo "  UI:      $UI_URL"
+echo "  UI:      $UI_URL (public, as $UI_SA)"
 echo "  Gateway: $GATEWAY_URL (private, as $GATEWAY_SA)"
 echo "  MCP:     ${MCP_SERVERS:-<none registered>}"
