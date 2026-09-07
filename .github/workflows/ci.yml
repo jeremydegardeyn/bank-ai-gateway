@@ -1,0 +1,46 @@
+name: CI
+
+# This repo had no CI. That is how a malformed string literal in the UI's inline
+# <script> reached production: it broke the whole script block, including window.onload
+# and therefore Google sign-in, and the only symptom was one line in a browser console.
+# Every backend health check stayed green. Tests existed; nothing ran them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ui/test_static.py runs `node --check` over the page's inline script. It fails
+      # loudly rather than skipping when node is missing, so the runner must have it —
+      # a check that quietly skips is worse than no check, because the report still
+      # says green.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Deliberately NOT `-r gateway/requirements.txt`. The tests replace the two seams
+      # that need the heavy SDKs (`passthrough.generate` and the MCP client), so this is
+      # the minimal set that actually imports — verified in a clean venv, because
+      # "passes locally" says almost nothing about a new CI job on a machine with months
+      # of accumulated packages.
+      - name: Install
+        run: pip install --quiet pytest pyflakes fastapi pydantic pyyaml requests
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Static check — undefined names
+        run: |
+          python -m pyflakes gateway/app/*.py gateway/app/*/*.py ui/*.py \
+            | grep -E "undefined name" && {
+              echo "::error::undefined name(s) found — see above"; exit 1; } || true
