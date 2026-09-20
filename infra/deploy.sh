@@ -49,6 +49,13 @@ if ! gcloud iam service-accounts describe "$UI_SA" --project "$PROJECT_ID" >/dev
     --display-name "Bank AI Gateway UI (Cloud Run runtime, no project roles)"
 fi
 
+# Daily token allowance per workload class. `classification` is FinChat's conversation-
+# safety classifier (ADR-0034): one call per customer turn at ~1.2k tokens, so the 40k
+# default is ~30 turns a day, after which verdicts come back budget_exceeded and turns go
+# unscreened. 400k is ~300 turns: a ceiling on spend, not a target. Set here rather than
+# with `services update`, because --set-env-vars below REPLACES the whole set on deploy.
+WORKLOAD_BUDGETS="${WORKLOAD_BUDGETS:-tool_calling_agent:200000;grounded_generation:100000;reasoning:80000;evaluation:80000;classification:400000}"
+
 echo "── Deploying gateway (private — IAM-authenticated callers only)…"
 gcloud run deploy ai-gateway \
   --project "$PROJECT_ID" --region "$REGION" \
@@ -56,7 +63,7 @@ gcloud run deploy ai-gateway \
   --min-instances 0 --memory 512Mi \
   --service-account "$GATEWAY_SA" \
   --no-allow-unauthenticated \
-  --set-env-vars "^|^GCP_PROJECT=$PROJECT_ID|GCP_REGION=$REGION|BQ_DATASET=$BQ_DATASET|MODEL_ARMOR_TEMPLATE=$MODEL_ARMOR_TEMPLATE|FIRESTORE_DATABASE=ai-gateway|PERSONA_EMAILS=$PERSONA_EMAILS|MCP_SERVERS=$MCP_SERVERS"
+  --set-env-vars "^|^GCP_PROJECT=$PROJECT_ID|GCP_REGION=$REGION|BQ_DATASET=$BQ_DATASET|MODEL_ARMOR_TEMPLATE=$MODEL_ARMOR_TEMPLATE|FIRESTORE_DATABASE=ai-gateway|PERSONA_EMAILS=$PERSONA_EMAILS|MCP_SERVERS=$MCP_SERVERS|WORKLOAD_BUDGETS=$WORKLOAD_BUDGETS"
 
 GATEWAY_URL=$(gcloud run services describe ai-gateway --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')
 
