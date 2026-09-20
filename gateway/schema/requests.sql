@@ -49,4 +49,13 @@ ALTER TABLE `strongsville-city-schools.ai_gateway_audit.requests`
   -- Without the second column the audit says a model answered a question about an
   -- account and cannot say what it read to do it.
   ADD COLUMN IF NOT EXISTS mcp_server        STRING,
-  ADD COLUMN IF NOT EXISTS tools_called      STRING;
+  ADD COLUMN IF NOT EXISTS tools_called      STRING,
+  -- The generation profile (/v1/complete): classification | json | NULL. Reasoning tokens
+  -- are billed as output and drawn from the caller's max_output_tokens; finish_reason
+  -- MAX_TOKENS with thoughts_tokens >> output_tokens is the truncation this profile exists
+  -- to prevent, and the row is where you prove it stopped happening.
+  ADD COLUMN IF NOT EXISTS profile           STRING,
+  ADD COLUMN IF NOT EXISTS thoughts_tokens   INT64,
+  ADD COLUMN IF NOT EXISTS finish_reason     STRING,
+  -- Which response redaction ran: json (values only, document kept parseable) | flat | NULL.
+  ADD COLUMN IF NOT EXISTS pii_response_redaction STRING;

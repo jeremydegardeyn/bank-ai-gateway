@@ -76,6 +76,60 @@ MCP_SERVERS="finchat=https://finchat-dev-mcp-xxxxx-uc.a.run.app" ./infra/deploy.
 `GET /v1/mcp/servers` lists what is reachable and what each offers; because discovery is
 a live connect, it doubles as the health check for the whole path.
 
+## Governing agents: `/v1/complete` and workload classes
+
+Humans get personas; machine call sites get **workload classes**. A registered agent
+calls `POST /v1/complete` with an `agent_id` and a `workload_class`, and the class decides
+its daily allowance and which tier it may reach. Unregistered classes are rejected —
+defaulting unknown callers is how a gateway becomes a proxy. Registration is deploy-time
+config, not code:
+
+```bash
+WORKLOAD_BUDGETS="tool_calling_agent:200000;evaluation:80000;classification:40000"
+WORKLOAD_TIERS="classification:standard;evaluation:standard"      # clamps, whatever the caller asked
+WORKLOAD_PROFILES="classification:classification"                 # HOW a class may answer — below
+```
+
+### The classification profile
+
+`WORKLOAD_TIERS` clamps `classification` to the standard tier, which is **gemini-2.5-flash,
+a thinking model**. Its reasoning is billed against the caller's `max_output_tokens` before
+the first byte of the answer is written, and the reasoning length is not fixed. Found live
+on 2026-09-19: FinChat's conversation-safety classifier, a ~150-token JSON verdict, came
+back truncated on *every* call at `max_output_tokens=256` (7 tokens of JSON, 249 of
+reasoning, `finish_reason=MAX_TOKENS`) and on about 1 in 15 at 1024. The caller's only
+lever was to keep raising the cap; the property being fought is one of a model the
+gateway chose, so the fix lives here.
+
+| Profile | Applies to | Sends to Vertex |
+|---|---|---|
+| `classification` | the `classification` class by default (`WORKLOAD_PROFILES`) | `thinkingConfig.thinkingBudget=0`, `temperature=0` |
+| `json` | any request with `response_format: "json"` | the above **plus** `responseMimeType=application/json` |
+
+JSON mode is opt-in rather than tied to the class because the same class also serves
+one-word (intent routing) and bare-array (reranking) callers. With the profile the
+FinChat verdict parses 10/10 at 256 tokens, with or without the flag; the intent router
+returns its one word in 1–4 tokens where it used to get a candidate with no parts at all.
+
+Two things travel with it:
+
+* **The response PII screen keeps JSON parseable.** A hit on a JSON reply is redacted
+  *by string value* — keys, numbers, booleans and nesting untouched, re-serialised
+  minified — instead of rewriting the document as one string. The flat rewrite produced
+  verdicts FinChat logged as `parse:redacted` and counted as unscreened turns, which turns
+  a PII control into a hole in a safety control. An unparseable (truncated) reply still
+  gets the flat redaction. The audit row records `pii_response_redaction` = `json` |
+  `flat`, and the server log says when it fired.
+* **Usage a caller can act on.** The payload carries `output_tokens`, `input_tokens` and
+  `thoughts_tokens` at the top level (they were only under `usage`, and callers reading
+  the top level got `None`) plus `finish_reason`. `MAX_TOKENS` with `thoughts_tokens`
+  far above `output_tokens` is the truncation this profile exists to prevent; the audit
+  row (`profile`, `thoughts_tokens`, `finish_reason` — apply `gateway/schema/requests.sql`)
+  is where you prove it stopped. Reasoning tokens are billed as output by Vertex and are
+  now charged to the budget as such.
+
+Tests: `gateway/app/test_complete_profile.py`, one per claim above.
+
 ## Why this architecture (the recommendation)
 
 | Question | Answer |
@@ -137,6 +191,8 @@ gateway/app/
   mcp_client.py        MCP client: discovery, OIDC auth, JSON Schema → Vertex schema
   mcp_endpoint.py      the governed tool-calling loop (/v1/mcp/chat)
   test_mcp.py          17 offline tests; each pins a claim the modules make
+  test_complete_profile.py  the classification profile: reasoning off, JSON kept parseable, usage visible
+  workloads.py         workload classes: budgets, tier clamps, generation profiles
   guards/pii.py        Model Armor client + local regex fallback
   guards/budget.py     Firestore daily quotas (in-memory fallback)
   routing.py           tier selection heuristics

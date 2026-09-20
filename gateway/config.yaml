@@ -7,6 +7,11 @@ tiers:
     model: gemini-2.5-flash
     max_output_tokens: 1024
     # Vertex pay-per-token; pennies per demo session.
+    # A THINKING model: by default its reasoning is billed against max_output_tokens
+    # before the answer starts. The `classification` workload class runs with
+    # thinkingBudget=0 for that reason (app/workloads.py PROFILES); if this tier is ever
+    # pointed at a model that cannot switch thinking off (2.5-pro), that profile will
+    # surface as a model_error rather than silently thinking.
   premium:
     provider: gemini
     model: gemini-2.5-pro

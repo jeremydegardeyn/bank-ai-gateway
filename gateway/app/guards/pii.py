@@ -83,6 +83,43 @@ def _screen_model_armor(text: str, kind: str) -> PiiVerdict:
     return PiiVerdict(match=match, findings=findings, engine="model-armor")
 
 
+def redact_json(text: str, verdict: PiiVerdict) -> str | None:
+    """Redact a structured (JSON) response without breaking its structure.
+
+    The flat redaction rewrites the document as one string, and a caller that asked for
+    JSON then receives something that is not JSON — FinChat's safety classifier logged
+    such verdicts as `parse:redacted` and treated the turn as unscreened, which turns a
+    PII control into a gap in a different control. Here only the STRING VALUES are
+    screened and rewritten; keys, numbers, booleans and nesting are untouched, and the
+    result is re-serialised minified. Returns None when `text` is not parseable JSON
+    (typically truncated), in which case the caller falls back to the flat redaction —
+    the document was already unusable.
+
+    Deliberately re-screens each value rather than reusing `verdict`: a finding that
+    Model Armor made on the whole document cannot be located inside it, so a value the
+    local detectors cannot see is left as is. That is the same posture as `screen`, whose
+    redacted text is always the local detectors' work.
+    """
+    if not verdict.match:
+        return text
+    try:
+        doc = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+    def walk(node):
+        if isinstance(node, str):
+            local = _screen_local(node)
+            return local.redacted_text if local.match else node
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        if isinstance(node, dict):
+            return {k: walk(v) for k, v in node.items()}
+        return node
+
+    return json.dumps(walk(doc), separators=(",", ":"), ensure_ascii=False)
+
+
 def screen(text: str, kind: str = "prompt") -> PiiVerdict:
     """kind: 'prompt' or 'response'.
 

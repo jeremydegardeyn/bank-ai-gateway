@@ -58,6 +58,12 @@ class CompleteRequest(BaseModel):
     tier: str | None = None
     session_id: str | None = None          # correlates with the caller's own logs
     max_output_tokens: int | None = None
+    # "json" asks for a machine-parseable document: JSON mode on the model, reasoning off,
+    # and a response PII pass that redacts values without breaking the structure. The
+    # `classification` class gets the reasoning-off half by default (workloads.PROFILES);
+    # this flag is how any class says its output is JSON.
+    response_format: str | None = None
+    temperature: float | None = None       # overrides the profile's; None = model default
     # What tier selection should read. A RAG prompt is long because of its CONTEXT, not
     # because the question is hard — routing on the assembled payload sent every grounded
     # question to the premium model. Callers pass the bare question here; tier routing
@@ -239,7 +245,8 @@ def chat(req: ChatRequest):
         except Exception:
             pass  # compaction is best-effort; never fail the chat for it
 
-    total_tokens = result["input_tokens"] + result["output_tokens"]
+    total_tokens = (result["input_tokens"] + result["output_tokens"]
+                    + (result.get("thoughts_tokens", 0) or 0))
     if compaction:
         total_tokens += compaction["tokens"]
     remaining = budget.record(req.user_id, total_tokens, persona["daily_tokens"])
@@ -475,9 +482,21 @@ def complete(req: CompleteRequest):
     tier_cfg = CONFIG["tiers"][tier]
     max_out = req.max_output_tokens or tier_cfg["max_output_tokens"]
 
+    # 4b. Generation profile. The clamp above put classification on a THINKING model whose
+    #     reasoning is billed against `max_out` before the answer starts; the profile turns
+    #     that off (and, for `response_format: "json"`, switches the model to JSON mode).
+    #     Chosen by the gateway for the same reason the tier is: the caller cannot fix a
+    #     property of a model it did not pick.
+    profile = workloads.generation_profile(workload, req.response_format)
+    if req.temperature is not None:
+        profile = {**(profile or {}), "temperature": req.temperature}
+    profile_name = workloads.profile_name(workload, req.response_format)
+    base_event["profile"] = profile_name
+
     # 5. Model call — the raw prompt, with no persona or memory injection.
     try:
-        result = PROVIDERS[tier_cfg["provider"]](prompt, tier_cfg["model"], max_out)
+        result = PROVIDERS[tier_cfg["provider"]](prompt, tier_cfg["model"], max_out,
+                                                 profile=profile)
     except Exception as exc:
         detail = getattr(exc, "detail", "") or str(exc)[:300]
         print(f"generate: vertex refused — {detail}")
@@ -487,36 +506,62 @@ def complete(req: CompleteRequest):
         return {"outcome": "model_error", "tier": tier, "model": tier_cfg["model"],
                 "error": type(exc).__name__, "detail": detail}
 
-    # 6. PII screen on the response.
+    # 6. PII screen on the response. A hit is redacted, never withheld: an agent that gets
+    #    an empty string back fails in a way that looks like a model bug. When the reply is
+    #    a JSON document the redaction is applied to its string VALUES so the document stays
+    #    parseable — a flat rewrite of a verdict handed FinChat's safety classifier text it
+    #    logged as an unscreened turn, which converts a PII control into a hole in a safety
+    #    control. Either way the audit row says what was found and which redaction ran.
     response_findings: list[str] = []
+    response_redaction: str | None = None
     if CONFIG["pii"].get("screen_responses"):
         out_verdict = pii.screen(result["text"], kind="response")
         if out_verdict.match:
             response_findings = out_verdict.findings
-            result["text"] = out_verdict.redacted_text or ""
+            structured = pii.redact_json(result["text"], out_verdict)
+            if structured is not None:
+                result["text"], response_redaction = structured, "json"
+            else:
+                result["text"], response_redaction = out_verdict.redacted_text or "", "flat"
+            print(f"complete: response PII {response_findings} for {req.agent_id}/"
+                  f"{req.workload_class} — {response_redaction} redaction applied")
 
     # 7. Charge + audit. Token counts are the attribution primitive the calling platform
-    #    joins to its own eval outcomes to get cost per *successful* task.
-    total_tokens = result["input_tokens"] + result["output_tokens"]
+    #    joins to its own eval outcomes to get cost per *successful* task. Reasoning tokens
+    #    are billed by Vertex as output, so they are charged here too.
+    thoughts = result.get("thoughts_tokens", 0) or 0
+    total_tokens = result["input_tokens"] + result["output_tokens"] + thoughts
     remaining = budget.record(bkey, total_tokens, cap)
     audit.log_event({
         **base_event, "outcome": "ok", "tier": tier, "tier_clamped": tier_clamped,
         "model": result["model"], "model_served": result.get("model_version"),
         "input_tokens": result["input_tokens"], "output_tokens": result["output_tokens"],
+        "thoughts_tokens": thoughts, "finish_reason": result.get("finish_reason"),
         "pii_prompt_redacted": verdict.match, "pii_response_findings": response_findings,
+        "pii_response_redaction": response_redaction,
     })
 
+    usage = {"input_tokens": result["input_tokens"],
+             "output_tokens": result["output_tokens"],
+             "thoughts_tokens": thoughts}
     return {
         "outcome": "ok",
         "text": result["text"],
         "tier": tier,
         "tier_clamped": tier_clamped,
+        "profile": profile_name,
         "model": result["model"],
         "model_served": result.get("model_version"),
-        "usage": {"input_tokens": result["input_tokens"],
-                  "output_tokens": result["output_tokens"]},
+        # MAX_TOKENS is how a caller tells "short answer" from "cut off". Together with
+        # thoughts_tokens it shows WHERE the budget went, which a text length cannot.
+        "finish_reason": result.get("finish_reason"),
+        "usage": usage,
+        # Also at the top level. Callers read `output_tokens` here and got None while it
+        # lived only under `usage`; a budget-exhaustion signal nobody can find is not one.
+        **usage,
         "budget": {"used": limit - remaining, "limit": limit, "remaining": remaining},
-        "pii": {"prompt_redacted": verdict.match, "response_findings": response_findings},
+        "pii": {"prompt_redacted": verdict.match, "response_findings": response_findings,
+                "response_redaction": response_redaction},
     }
 
 

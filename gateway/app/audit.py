@@ -29,6 +29,9 @@ _EXPECTED_FIELDS = {
     # The MCP surface. "which model answered" is half the record; "what data did it
     # reach for" is the half a regulator asks about, and it is only in `tools_called`.
     "mcp_server", "tools_called",
+    # The classification profile: what ran, whether the model got cut off, where the
+    # budget went. Without these the row can say output_tokens=7 and not why.
+    "profile", "thoughts_tokens", "finish_reason", "pii_response_redaction",
 }
 _schema_checked = False
 

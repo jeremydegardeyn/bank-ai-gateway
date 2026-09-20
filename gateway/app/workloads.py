@@ -14,6 +14,7 @@ Registration is deployment config, not code:
 
     WORKLOAD_BUDGETS="tool_calling_agent:200000;evaluation:80000;classification:40000"
     WORKLOAD_TIERS="classification:standard;evaluation:standard"
+    WORKLOAD_PROFILES="classification:classification"     # see PROFILES below
 
 An unregistered workload class is rejected — same posture as an unprovisioned human. The
 alternative, defaulting unknown callers to a permissive tier, is how a gateway becomes a
@@ -41,6 +42,36 @@ DEFAULT_WORKLOAD_TIERS = {
     "classification": "standard",
     "evaluation": "standard",
 }
+
+# Generation profiles: HOW a class is allowed to answer, as opposed to WHICH model answers.
+#
+# The tier clamp above sends classification to gemini-2.5-flash, which is a thinking model.
+# Its reasoning is charged against the caller's output budget before a byte of the answer
+# is written, and the reasoning length is not fixed. FinChat's conversation-safety
+# classifier — a ~150-token JSON verdict — came back truncated on EVERY call at
+# max_output_tokens=256 and on about 1 in 15 at 1024; the intent router at 16 tokens got
+# candidates with no parts at all. Raising the cap is a mitigation the caller has to keep
+# re-tuning; turning the reasoning off is the fix, and it belongs here because the gateway
+# is what chose the thinking model.
+#
+#   thinking_budget 0      — a classification needs no chain of thought; the budget is
+#                            the answer's. Vertex `generationConfig.thinkingConfig`.
+#   temperature 0          — a classifier's job is to be repeatable.
+#   response_mime_type     — JSON mode: the model emits a parseable document, no prose,
+#                            no ``` fences. Opt-in via `response_format: "json"` rather
+#                            than tied to the class, because the same class also serves
+#                            one-word (intent) and bare-array (rerank) callers.
+PROFILES = {
+    "classification": {"thinking_budget": 0, "temperature": 0.0, "response_mime_type": None},
+    "json": {"thinking_budget": 0, "temperature": 0.0,
+             "response_mime_type": "application/json"},
+}
+DEFAULT_WORKLOAD_PROFILES = {
+    "classification": "classification",
+}
+# Request-level flag -> profile. `response_format: "json"` is the only value that changes
+# anything; anything else falls back to the class default.
+RESPONSE_FORMATS = {"json": "json"}
 
 
 def _parse_pairs(raw: str) -> dict[str, str]:
@@ -73,8 +104,19 @@ def _tier_clamps() -> dict[str, str]:
     return clamps
 
 
+def _profile_names() -> dict[str, str]:
+    """Class -> profile name. Override per deployment with
+    WORKLOAD_PROFILES="evaluation:json;classification:classification"; an unknown profile
+    name is ignored rather than guessed at."""
+    names = dict(DEFAULT_WORKLOAD_PROFILES)
+    for key, value in _parse_pairs(os.environ.get("WORKLOAD_PROFILES", "")).items():
+        if value in PROFILES:
+            names[key] = value
+    return names
+
+
 def resolve(workload_class: str) -> dict | None:
-    """Returns {name, daily_tokens, clamp_tier} or None for an unregistered class."""
+    """Returns {name, daily_tokens, clamp_tier, profile} or None for an unregistered class."""
     budgets = _budgets()
     if workload_class not in budgets:
         return None
@@ -82,7 +124,27 @@ def resolve(workload_class: str) -> dict | None:
         "name": workload_class,
         "daily_tokens": budgets[workload_class],
         "clamp_tier": _tier_clamps().get(workload_class),
+        "profile": _profile_names().get(workload_class),
     }
+
+
+def generation_profile(workload: dict, response_format: str | None = None) -> dict | None:
+    """The generation settings a request runs under, or None for plain generation.
+
+    The request flag wins over the class default because it is the more specific
+    statement: a caller that says `response_format: "json"` has told us the shape of its
+    output, and a class default cannot know that. An unknown format string is ignored —
+    a typo must not silently turn a classifier back into a thinking call, so the class
+    profile still applies.
+    """
+    name = profile_name(workload, response_format)
+    return dict(PROFILES[name]) if name else None
+
+
+def profile_name(workload: dict, response_format: str | None = None) -> str | None:
+    """Which profile applies — for the audit row and the response payload."""
+    fmt = (response_format or "").strip().lower()
+    return RESPONSE_FORMATS.get(fmt) or workload.get("profile")
 
 
 def known_classes() -> list[str]:
